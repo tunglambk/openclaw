@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { sql } from "kysely";
 import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import { MEMORY_INDEX_VECTOR_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
@@ -13,8 +14,8 @@ import {
   type IndexedMemoryChunk,
   type MemoryChunkWrite,
 } from "./manager-chunk-writer.js";
+import { admitMemoryVectorIndex } from "./manager-search-knn.js";
 import { markMemoryVectorRebuildRequired } from "./manager-vector-rebuild-state.js";
-import { writeMemoryVectors } from "./manager-vector-write.js";
 
 const SOURCE_WRITE_BATCH_SIZE = 128;
 
@@ -150,10 +151,13 @@ export function readMemorySourceHash(
 // The caller retains transaction admission and repeats file validation before
 // each BEGIN attempt. This kernel runs only inside that admitted native transaction.
 export class MemorySourceIndexKernel {
+  private readonly search: ReturnType<typeof admitMemoryVectorIndex>;
   constructor(
     private readonly database: DatabaseSync,
     private readonly state: SourceIndexState,
-  ) {}
+  ) {
+    this.search = admitMemoryVectorIndex(database);
+  }
 
   replaceRows(params: MemorySourceIndexHeader, rows: Iterable<MemorySourceIndexRow>): void {
     const { entry, source, model, now, vectorReady } = params;
@@ -177,8 +181,8 @@ export class MemorySourceIndexKernel {
         batch,
       );
       if (vectorReady) {
-        writeMemoryVectors(
-          this.database,
+        this.search.capability.write(
+          this.search.index,
           batch.flatMap((row) =>
             row.embedding?.length ? [{ id: row.id, embedding: row.embedding }] : [],
           ),
@@ -280,22 +284,11 @@ export class MemorySourceIndexKernel {
     try {
       // Keep cleanup atomic before recording rebuild debt on a caught failure.
       runSqliteImmediateTransactionSync(this.database, () => {
-        if (!ids) {
-          this.database
-            .prepare(
-              `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (` +
-                "SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)",
-            )
-            .run(pathname, source);
-          return;
-        }
-        // sqlite-vec only uses its primary-key lookup for scalar equality.
-        const deletion = this.database.prepare(
-          `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id = ?`,
+        this.search.capability.remove(
+          this.search.index,
+          ids ??
+            sql`SELECT id FROM memory_index_chunks WHERE path = ${pathname} AND source = ${source}`,
         );
-        for (const id of ids) {
-          deletion.run(id);
-        }
       });
     } catch {
       markMemoryVectorRebuildRequired(this.database);
