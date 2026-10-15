@@ -85,6 +85,12 @@ preferred remote URL, Tailscale Serve/Funnel, a non-preferred remote URL, then
 bind-derived addresses. For local QR setup, `gateway.publicOrigin` is the final
 fallback before the loopback-only error. Without `--remote`, the configured
 `plugins.entries.device-pair.config.publicUrl` supplies the override.
+
+A container's own interface addresses are reachable only from its container
+network, so they cannot serve as a pairing endpoint. With `gateway.bind=lan`
+inside a container, the resolver skips LAN discovery and uses
+`gateway.publicOrigin` instead, or reports that an explicit endpoint is
+required.
 Unlike QR setup, [cloud enrollment](/gateway/cloud-workers) explicitly asks the
 same resolver to prefer public ingress over discovery for fresh cloud workers.
 

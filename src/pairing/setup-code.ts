@@ -21,6 +21,7 @@ import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
+import { isContainerEnvironment } from "../infra/container-environment.js";
 import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   pickMatchingExternalInterfaceAddress,
@@ -52,6 +53,9 @@ const PAIRING_SETUP_MAX_URLS = 8;
 
 export const PAIRING_GATEWAY_LOOPBACK_ERROR =
   "Gateway is only bound to loopback. Set gateway.publicOrigin to your public HTTPS origin, configure plugins.entries.device-pair.config.publicUrl, enable tailscale serve, or set gateway.bind=lan.";
+
+const PAIRING_GATEWAY_CONTAINER_NETWORK_ERROR =
+  "Gateway runs in a container, so its own interface addresses are only reachable inside the container network. Set gateway.publicOrigin to the address devices use, configure plugins.entries.device-pair.config.publicUrl, or enable tailscale serve.";
 
 type PairingSetupCommandResult = {
   code: number | null;
@@ -372,8 +376,14 @@ export async function resolvePairingGatewayUrl(
     return { url: remoteUrl, source: "gateway.remote.url" };
   }
 
+  // A pairing URL has to be reachable by the device that scans it. A
+  // container's own interfaces belong to the container network, so LAN
+  // discovery there advertises an endpoint no pairing client can reach; leave
+  // the answer to an explicit public origin instead, the same way Bonjour
+  // discovery stays off in detected containers until an operator opts in.
+  const containerGateway = isContainerEnvironment();
   const advertisedLanHost =
-    cfg.gateway?.bind === "lan"
+    cfg.gateway?.bind === "lan" && !containerGateway
       ? await resolveAdvertisedLanHostCore({
           networkInterfaces: opts.networkInterfaces,
           runCommandWithTimeout: opts.runCommandWithTimeout,
@@ -392,6 +402,12 @@ export async function resolvePairingGatewayUrl(
     pickLanHost: () => advertisedLanHost,
   });
   if (bindResult) {
+    if ("url" in bindResult) {
+      return bindResult;
+    }
+    if (containerGateway && cfg.gateway?.bind === "lan") {
+      return publicOriginResult ?? { error: PAIRING_GATEWAY_CONTAINER_NETWORK_ERROR };
+    }
     return bindResult;
   }
 
