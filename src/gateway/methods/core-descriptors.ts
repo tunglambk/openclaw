@@ -741,4 +741,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ],
   ["ui.command.result", "ui-command", "operator.read", "2026.10"],
   ["mcp.events.list", "mcp-events", "operator.read", "2026.10"],
+  ["tools.github.read", "tools-github", "operator.sessions.read", "2026.10", { advertise: false }],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
